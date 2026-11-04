@@ -1,32 +1,69 @@
 # Penguin Species Classification
 
-This project predicts penguin species from four physical measurements:
+## Research question
 
-- bill length;
-- bill depth;
-- flipper length;
-- body mass.
+Can penguin species be predicted from four physical measurements alone, without using island or sex as model inputs? What additional structure is revealed when the same measurements are clustered without species labels?
 
-`island` and `sex` are retained as metadata for error analysis but are not used as model inputs.
+This is a compact, reproducible machine-learning investigation based on the Palmer Penguins dataset. It focuses on sound evaluation, leakage prevention, error analysis, and carefully limited conclusions rather than maximizing a single score.
 
-## Workflow
+## Data
 
-1. Load the Seaborn Penguins dataset.
-2. Validate its schema and domain constraints with Pandera.
-3. Store the validated source snapshot in Parquet through PyArrow.
-4. Exclude the two observations for which all four model features are missing.
-5. Create a deterministic stratified 70/15/15 train/validation/test split.
-6. Compare a most-frequent-class baseline, scaled Logistic Regression, and Random Forest.
-7. Select the best candidate by validation macro F1.
-8. Refit the selected model on train plus validation data and evaluate it once on the test split.
-9. Inspect the confusion matrix, individual errors, subgroup performance, and permutation importance.
+The data are the Palmer Penguins dataset distributed with Seaborn. The observations were originally collected at Palmer Station in Antarctica by Dr. Kristen Gorman and the Palmer Station Long Term Ecological Research program.
 
-## Data roles
+- [Seaborn dataset file](https://github.com/mwaskom/seaborn-data/blob/master/penguins.csv)
+- [Original Palmer Penguins project](https://allisonhorst.github.io/palmerpenguins/)
+
+Data roles:
 
 - Features: `bill_length_mm`, `bill_depth_mm`, `flipper_length_mm`, `body_mass_g`
 - Target: `species`
-- Metadata: `island`, `sex`
-- Stable record identifier: `id`
+- Metadata used only for error analysis: `island`, `sex`
+- Stable identifier: `id`
+
+The schema and domain constraints are validated with Pandera. Two of the 344 observations contain no values for any of the four model features, so they are excluded. The remaining 342 observations are stored in Parquet and assigned to a deterministic stratified 70/15/15 train/validation/test split.
+
+## Method
+
+Three models are compared:
+
+1. `DummyClassifier` with the most-frequent strategy as the baseline.
+2. Scaled Logistic Regression as a simple linear candidate.
+3. Random Forest as a nonlinear candidate.
+
+Candidate models are compared using five-fold stratified cross-validation on the training partition. Accuracy and macro F1 are reported, with macro F1 used for model selection because Chinstrap is less common than Adelie and Gentoo. Scaling is kept inside a scikit-learn `Pipeline`, so it is fitted separately in each fold and cannot leak information from the held-out fold.
+
+The fixed validation partition provides a secondary confirmation. The selected model is then refitted on train plus validation data and evaluated once on the untouched test partition.
+
+## Results
+
+Logistic Regression was selected.
+
+- Five-fold CV macro F1: **0.985 ± 0.012**
+- Validation accuracy: **0.980**
+- Validation macro F1: **0.977**
+- Test accuracy: **0.981**
+- Test macro F1: **0.975**
+- Test errors: **1 of 52 observations**
+
+The model clearly improves on the most-frequent baseline. In this dataset, the four physical measurements contain enough information to distinguish the three species accurately without using island or sex as predictors. The small test set means that the numerical estimate should still be interpreted cautiously.
+
+## Error analysis and interpretation
+
+The notebook includes:
+
+- the per-class precision, recall, and F1 report;
+- a test confusion matrix;
+- the complete misclassified observation;
+- descriptive accuracy by island and sex;
+- permutation feature importance.
+
+Island and sex are retained only as metadata. They are not model inputs, so subgroup inspection does not change the classifier.
+
+## Unsupervised analysis
+
+K-means with three clusters is fitted to scaled physical measurements without access to species labels. PCA is used only to visualize the geometry in two dimensions. After fitting, cluster assignments are compared with species using a contingency table, Adjusted Rand Index, and Normalized Mutual Information.
+
+The clusters recover most, but not all, of the species structure: Adjusted Rand Index is **0.900** and Normalized Mutual Information is **0.866**. This supports the conclusion that morphology contains strong natural grouping information while supervised labels are still useful for resolving overlap between species.
 
 ## Project structure
 
@@ -56,51 +93,57 @@ penguins-ml-project/
 Install the locked environment:
 
 ```powershell
-uv sync
+uv sync --frozen
 ```
 
-Generate the processed dataset and split assignments:
+Generate the validated processed dataset and deterministic split assignments:
 
 ```powershell
 uv run python -m penguins_project.train
 ```
 
-Run JupyterLab:
-
-```powershell
-uv run jupyter lab
-```
-
-Open `notebooks/02_modeling_complete.ipynb` and select **Kernel → Restart Kernel and Run All Cells**.
-
-Run the data validation tests:
+Run the validation tests:
 
 ```powershell
 uv run pytest -q
 ```
 
-## Evaluation
+Start JupyterLab:
 
-The notebook reports:
+```powershell
+uv run jupyter lab
+```
 
-- validation and test accuracy;
-- validation and test macro F1;
-- per-class precision, recall, and F1;
-- a test confusion matrix;
-- individual misclassified observations;
-- descriptive accuracy by island and sex;
-- permutation feature importance.
+Open `notebooks/02_modeling_complete.ipynb`, choose **Kernel → Restart Kernel and Run All Cells**, verify that no cell fails, and save the notebook so that all final tables and figures remain embedded.
 
-The test split is not used for model selection. It is evaluated only after the best candidate has been selected using the validation split.
+## Reproducibility controls
+
+- Random seed: `32`
+- Deterministic stratified split stored in `split_assignments.parquet`
+- Leakage-sensitive scaling inside a `Pipeline`
+- Five-fold `StratifiedKFold` with shuffling and a fixed seed
+- Test set evaluated only after model selection
+- Dependency resolution recorded in `uv.lock`
+- Input validation implemented with Pandera
 
 ## Limitations
 
 - The dataset is small, so metric estimates can vary across splits.
 - The results may not generalize beyond the observed Palmer Archipelago population.
 - Two observations with no usable physical measurements are excluded.
-- Subgroup metrics are descriptive because some test subgroups contain few observations.
-- Feature importance is associational rather than causal.
+- Some test subgroups contain few observations, so subgroup metrics are descriptive.
+- Permutation importance is associational rather than causal.
+- K-means assumes roughly spherical clusters and requires the number of clusters in advance.
 
-## AI disclosure
+## Artificial-intelligence use disclosure
 
-AI assistance was used for code review, debugging, explanations, and notebook structuring. The author reviewed the methodology, executed the analysis, inspected the outputs, and is responsible for the final conclusions.
+ChatGPT was used as a learning and development assistant for explaining Pandera and Parquet, reviewing the deterministic split for leakage, debugging selected code fragments, suggesting a reproducible notebook structure, and helping draft or revise selected implementation and documentation sections. The methodological choices retained in the final project were checked against the course specification and verified by running the workflow, tests, metrics, and plots.
+
+Representative prompts included:
+
+- “Explain what each Penguins column represents and which Pandera checks are justified.”
+- “Review this stratified train/validation/test split and identify possible leakage.”
+- “Explain why macro F1 should accompany accuracy for these class frequencies.”
+- “Show how to compare the candidate models with stratified cross-validation while keeping preprocessing inside a pipeline.”
+- “Explain how K-means and PCA can be used as a separate unsupervised analysis without using species labels during fitting.”
+
